@@ -1,0 +1,1620 @@
+{
+  "name": "Lead Generation Engine (Apollo + AI + Gmail + HubSpot)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "c3d4e5f6-0001-4000-8000-000000000001",
+      "name": "Manual: Run Sourcing",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0002-4000-8000-000000000002",
+      "name": "Sourcing 8AM (Mon-Fri)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// EDIT THIS: your Ideal Customer Profile\nreturn [{ json: {\n  person_titles: ['Founder', 'CEO', 'COO', 'Head of Operations', 'Director of Operations'],\n  person_locations: ['United States', 'United Kingdom', 'Canada', 'Australia'],\n  organization_num_employees_ranges: ['11,50', '51,200'],\n  daily_target: 25,   // max new leads enriched per day (each costs 1 Apollo credit)\n  min_score: 60,      // leads below this AI score are saved as 'disqualified'\n  icp_description: 'Small and mid-sized service businesses (clinics, logistics, real estate, agencies, e-commerce) with 11-200 employees that still do repetitive manual work: answering the same customer questions, data entry, lead follow-up, invoicing. Decision makers who can approve a software or automation purchase.'\n} }];"
+      },
+      "id": "c3d4e5f6-0003-4000-8000-000000000003",
+      "name": "ICP Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0004-4000-8000-000000000004",
+      "name": "Get Existing Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const cfg = $('ICP Config').first().json;\nconst ids = items.map(i => String(i.json.apollo_id || '')).filter(Boolean);\nconst emails = items.map(i => String(i.json.email || '').toLowerCase()).filter(Boolean);\nreturn [{ json: { ...cfg, existing_ids: ids, existing_emails: emails } }];"
+      },
+      "id": "c3d4e5f6-0005-4000-8000-000000000005",
+      "name": "Collect Existing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apollo.io/api/v1/mixed_people/api_search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ person_titles: $json.person_titles, person_locations: $json.person_locations, organization_num_employees_ranges: $json.organization_num_employees_ranges, include_similar_titles: true, page: Math.floor(Math.random() * 10) + 1, per_page: Math.min(100, $json.daily_target * 3) }) }}",
+        "options": {}
+      },
+      "id": "c3d4e5f6-0006-4000-8000-000000000006",
+      "name": "Apollo: Search People",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Apollo API Key (header: x-api-key)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const cfg = $('Collect Existing').first().json;\nconst people = $input.first().json.people || [];\nconst seen = new Set(cfg.existing_ids);\nconst out = [];\nfor (const p of people) {\n  if (!p.id || seen.has(String(p.id))) continue;\n  if (p.has_email === false) continue;\n  seen.add(String(p.id));\n  out.push({ json: {\n    apollo_id: String(p.id),\n    first_name: p.first_name || '',\n    title: p.title || '',\n    company: (p.organization && p.organization.name) || ''\n  } });\n  if (out.length >= cfg.daily_target) break;\n}\nreturn out;"
+      },
+      "id": "c3d4e5f6-0007-4000-8000-000000000007",
+      "name": "Filter New People",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apollo.io/api/v1/people/match",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ id: $json.apollo_id, reveal_personal_emails: false, reveal_phone_number: false }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1200
+            }
+          }
+        }
+      },
+      "id": "c3d4e5f6-0008-4000-8000-000000000008",
+      "name": "Apollo: Enrich Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Apollo API Key (header: x-api-key)"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const base = $('Filter New People').item.json;\nconst p = $json.person || {};\nconst org = p.organization || {};\nconst email = String(p.email || '').toLowerCase();\nconst domain = org.primary_domain || '';\nreturn { json: {\n  ...base,\n  first_name: p.first_name || base.first_name,\n  name: p.name || [p.first_name, p.last_name].filter(Boolean).join(' '),\n  email,\n  email_status: p.email_status || 'unknown',\n  title: p.title || base.title,\n  company: org.name || base.company,\n  website: org.website_url || (domain ? 'https://' + domain : ''),\n  linkedin_url: p.linkedin_url || '',\n  industry: org.industry || '',\n  employees: org.estimated_num_employees || '',\n  country: p.country || ''\n} };"
+      },
+      "id": "c3d4e5f6-0009-4000-8000-000000000009",
+      "name": "Merge Enrichment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.website }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "c3d4e5f6-0010-4000-8000-000000000010",
+      "name": "Fetch Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1780,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const lead = $('Merge Enrichment').item.json;\nconst text = String($json.data || '')\n  .replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')\n  .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&nbsp;/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim()\n  .slice(0, 3000);\nreturn { json: { ...lead, websiteText: text || 'No website content available.' } };"
+      },
+      "id": "c3d4e5f6-0011-4000-8000-000000000011",
+      "name": "Merge Website",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=ICP:\n{{ $('ICP Config').first().json.icp_description }}\n\nLEAD:\nName: {{ $json.name }}\nTitle: {{ $json.title }}\nCompany: {{ $json.company }}\nIndustry: {{ $json.industry }}\nEmployees: {{ $json.employees }}\nCountry: {{ $json.country }}\n\nWEBSITE CONTENT:\n{{ $json.websiteText }}",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You are a B2B lead qualification analyst. Score how well a lead fits the Ideal Customer Profile (ICP).\n\nSCORING GUIDE (0-100):\n- 80-100: strong fit, decision maker, clear manual process we can automate\n- 60-79: good fit, some uncertainty about role or need\n- 40-59: weak fit\n- 0-39: poor fit\n\nBase your judgement ONLY on the data provided. Never invent facts about the company.\nTier: A = 80+, B = 60-79, C = below 60.\n\nOutput ONLY valid JSON: {\"score\":0,\"tier\":\"A\",\"reason\":\"one sentence\",\"pain_point\":\"likely manual-work pain point, one sentence\",\"hook\":\"one true, specific detail from the website we can mention in an email, or empty string\"}"
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0012-4000-8000-000000000012",
+      "name": "AI: Score Lead",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        2220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "c3d4e5f6-0013-4000-8000-000000000013",
+      "name": "OpenAI Model (Score)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        2220,
+        240
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const lead = $('Merge Website').item.json;\nconst minScore = $('ICP Config').first().json.min_score;\nlet raw = String($json.text || '').replace(/```json|```/g, '').trim();\nlet s = { score: 0, tier: 'C', reason: 'Could not score', pain_point: '', hook: '' };\ntry { const p = JSON.parse(raw); if (p && typeof p.score !== 'undefined') s = p; } catch (e) {}\nconst emailValid = lead.email && lead.email.includes('@') && !lead.email.includes('not_unlocked') && lead.email_status === 'verified';\nconst qualified = emailValid && Number(s.score) >= minScore;\nreturn { json: { ...lead, score: Number(s.score) || 0, tier: s.tier || 'C', score_reason: s.reason || '', pain_point: s.pain_point || '', personalization_hook: s.hook || '', status: qualified ? 'new' : 'disqualified', step: 0, added_at: new Date().toISOString() } };"
+      },
+      "id": "c3d4e5f6-0014-4000-8000-000000000014",
+      "name": "Parse Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "apollo_id": "={{ $json.apollo_id }}",
+            "name": "={{ $json.name }}",
+            "first_name": "={{ $json.first_name }}",
+            "email": "={{ $json.email }}",
+            "title": "={{ $json.title }}",
+            "company": "={{ $json.company }}",
+            "website": "={{ $json.website }}",
+            "linkedin_url": "={{ $json.linkedin_url }}",
+            "industry": "={{ $json.industry }}",
+            "employees": "={{ $json.employees }}",
+            "country": "={{ $json.country }}",
+            "score": "={{ $json.score }}",
+            "tier": "={{ $json.tier }}",
+            "score_reason": "={{ $json.score_reason }}",
+            "pain_point": "={{ $json.pain_point }}",
+            "personalization_hook": "={{ $json.personalization_hook }}",
+            "status": "={{ $json.status }}",
+            "step": "={{ $json.step }}",
+            "added_at": "={{ $json.added_at }}"
+          },
+          "matchingColumns": [
+            "apollo_id"
+          ],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0015-4000-8000-000000000015",
+      "name": "Save Lead to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2740,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "c3d4e5f6-0016-4000-8000-000000000016",
+      "name": "Manual: Run Outreach",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0017-4000-8000-000000000017",
+      "name": "Outreach 10AM (Mon-Fri)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        860
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0018-4000-8000-000000000018",
+      "name": "Get All Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        800
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const DAILY_CAP = 25;   // max emails per day\nconst GAP_1 = 3;        // days before follow-up 1\nconst GAP_2 = 4;        // days after follow-up 1 before the break-up email\nconst DAY = 86400000;\nconst now = Date.now();\nconst due = [];\nfor (const it of items) {\n  const l = it.json;\n  if (!l.email) continue;\n  const step = parseInt(l.step || '0', 10);\n  const status = String(l.status || '');\n  const sent = l.sent_at ? new Date(l.sent_at).getTime() : 0;\n  let next = 0;\n  if (status === 'new' && step === 0) next = 1;\n  else if (status === 'contacted' && step === 1 && sent && now - sent >= GAP_1 * DAY) next = 2;\n  else if (status === 'contacted' && step === 2 && sent && now - sent >= GAP_2 * DAY) next = 3;\n  if (next) due.push({ json: { ...l, next_step: next } });\n}\n// follow-ups first, then new leads by AI score\ndue.sort((a, b) => (b.json.next_step > 1) - (a.json.next_step > 1) || Number(b.json.score || 0) - Number(a.json.score || 0));\nreturn due.slice(0, DAILY_CAP);"
+      },
+      "id": "c3d4e5f6-0019-4000-8000-000000000019",
+      "name": "Select Due Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "c3d4e5f6-0020-4000-8000-000000000020",
+      "name": "Loop Over Leads",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        680,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.next_step == 1 ? 'TASK: Write the FIRST cold email. Max 90 words. Open with the personalization hook if one is given, connect it to the pain point, suggest ONE automation we could build, and end with one low-pressure question.' : $json.next_step == 2 ? 'TASK: Write a SHORT follow-up (max 50 words) to an email sent a few days ago. Do not repeat the intro. Add one small new idea or example of value. End with a simple question.' : 'TASK: Write a polite BREAK-UP email (max 40 words). Say this is the last note, that you will not follow up again, and that they can reach out any time.' }}\n\nLEAD:\nName: {{ $json.first_name }}\nTitle: {{ $json.title }}\nCompany: {{ $json.company }}\nPain point: {{ $json.pain_point }}\nPersonalization hook: {{ $json.personalization_hook }}",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You are a B2B outreach specialist writing on behalf of YOUR_NAME at YOUR_COMPANY. YOUR_COMPANY builds custom AI automations (customer support agents, lead generation, document processing) that save teams hours of manual work.\n\nRULES:\n1. Plain text only: no markdown, no emojis, no exclamation marks.\n2. Use ONLY facts provided in the lead data. Never invent facts, statistics, results or client names.\n3. Sound like a real person writing one-to-one, not a template. No hype words.\n4. Sign off with: YOUR_NAME, YOUR_COMPANY\n5. The very last line must be exactly: If this isn't relevant, just reply \"no\" and I won't email again.\n6. Output ONLY valid JSON: {\"subject\":\"...\",\"body\":\"...\"}. Subject: under 7 words, no clickbait."
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0021-4000-8000-000000000021",
+      "name": "AI: Write Email",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        900,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0.7
+        }
+      },
+      "id": "c3d4e5f6-0022-4000-8000-000000000022",
+      "name": "OpenAI Model (Email)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        900,
+        1040
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const lead = $('Loop Over Leads').item.json;\nlet raw = String($json.text || '').replace(/```json|```/g, '').trim();\nlet out = null;\ntry { out = JSON.parse(raw); } catch (e) { out = null; }\nconst ok = !!(out && out.subject && out.body && String(out.body).length > 20);\nreturn { json: { ...lead, ok, new_subject: ok ? out.subject : '', body: ok ? out.body : '' } };"
+      },
+      "id": "c3d4e5f6-0023-4000-8000-000000000023",
+      "name": "Parse Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ok1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0024-4000-8000-000000000024",
+      "name": "Email OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1420,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f1",
+              "leftValue": "={{ $json.next_step }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0025-4000-8000-000000000025",
+      "name": "First Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1640,
+        740
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.new_subject }}",
+        "emailType": "text",
+        "message": "={{ $json.body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "c3d4e5f6-0026-4000-8000-000000000026",
+      "name": "Gmail: Send Intro",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1880,
+        640
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "reply",
+        "messageId": "={{ $json.message_id }}",
+        "emailType": "text",
+        "message": "={{ $json.body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "c3d4e5f6-0027-4000-8000-000000000027",
+      "name": "Gmail: Reply Follow-up",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1880,
+        840
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "email": "={{ $('Parse Email').item.json.email }}",
+            "status": "={{ $('Parse Email').item.json.next_step == 3 ? 'sequence_complete' : 'contacted' }}",
+            "step": "={{ $('Parse Email').item.json.next_step }}",
+            "sent_at": "={{ $now.toISO() }}",
+            "thread_id": "={{ $json.threadId }}",
+            "message_id": "={{ $json.id }}",
+            "subject": "={{ $('Parse Email').item.json.next_step == 1 ? $('Parse Email').item.json.new_subject : $('Parse Email').item.json.subject }}"
+          },
+          "matchingColumns": [
+            "email"
+          ],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0028-4000-8000-000000000028",
+      "name": "Update After Send",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2120,
+        740
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ Math.floor(Math.random() * 51) + 40 }}",
+        "unit": "seconds"
+      },
+      "id": "c3d4e5f6-0029-4000-8000-000000000029",
+      "name": "Wait 40-90s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2340,
+        740
+      ]
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "labelIds": [
+            "INBOX"
+          ]
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0030-4000-8000-000000000030",
+      "name": "Gmail Trigger (Replies)",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        1700
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "thread_id",
+              "lookupValue": "={{ $json.threadId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0031-4000-8000-000000000031",
+      "name": "Find Lead by Thread",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        1700
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Reply from the lead:\n\n{{ String($('Gmail Trigger (Replies)').item.json.text || $('Gmail Trigger (Replies)').item.json.snippet || '').slice(0, 1500) }}",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You classify replies to a cold outreach email. Choose exactly ONE category:\n- interested: wants to talk, asks for a call, demo, pricing or more details\n- question: asks a question but has not clearly said yes or no\n- not_interested: politely or firmly declines\n- unsubscribe: asks to stop emailing, or replies just \"no\"\n- out_of_office: automatic reply or away message\n\nOutput ONLY valid JSON: {\"category\":\"...\",\"summary\":\"one short sentence\"}"
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0032-4000-8000-000000000032",
+      "name": "AI: Classify Reply",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        480,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "c3d4e5f6-0033-4000-8000-000000000033",
+      "name": "OpenAI Model (Classify)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        480,
+        1940
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const lead = $('Find Lead by Thread').item.json;\nconst trig = $('Gmail Trigger (Replies)').item.json;\nlet raw = String($json.text || '').replace(/```json|```/g, '').trim();\nlet out = { category: 'question', summary: 'Could not classify automatically. Please review.' };\ntry { const p = JSON.parse(raw); if (p && p.category) out = p; } catch (e) {}\nconst replyText = String(trig.text || trig.snippet || '').slice(0, 1500);\nreturn { json: { ...lead, category: out.category, summary: out.summary, replyText, reply_message_id: trig.id } };"
+      },
+      "id": "c3d4e5f6-0034-4000-8000-000000000034",
+      "name": "Parse Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "email": "={{ $json.email }}",
+            "status": "={{ $json.category }}",
+            "reply_summary": "={{ $json.summary }}",
+            "replied_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "email"
+          ],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0035-4000-8000-000000000035",
+      "name": "Update Lead Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1000,
+        1700
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ $('Parse Classification').item.json.category }}",
+              "rightValue": "interested",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "h2",
+              "leftValue": "={{ $('Parse Classification').item.json.category }}",
+              "rightValue": "question",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0036-4000-8000-000000000036",
+      "name": "Hot Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1220,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "=:fire: *Hot lead replied!*\n*{{ $('Parse Classification').item.json.name }}* ({{ $('Parse Classification').item.json.title }}, {{ $('Parse Classification').item.json.company }})\nScore: {{ $('Parse Classification').item.json.score }} (Tier {{ $('Parse Classification').item.json.tier }})\nCategory: {{ $('Parse Classification').item.json.category }}\nSummary: {{ $('Parse Classification').item.json.summary }}\nReply: {{ $('Parse Classification').item.json.replyText }}\nLinkedIn: {{ $('Parse Classification').item.json.linkedin_url }}",
+        "otherOptions": {}
+      },
+      "id": "c3d4e5f6-0037-4000-8000-000000000037",
+      "name": "Slack: Hot Lead Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1460,
+        1500
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "resource": "contact",
+        "operation": "upsert",
+        "email": "={{ $('Parse Classification').item.json.email }}",
+        "additionalFields": {
+          "firstName": "={{ $('Parse Classification').item.json.first_name }}",
+          "lastName": "={{ $('Parse Classification').item.json.name.split(' ').slice(1).join(' ') }}",
+          "jobTitle": "={{ $('Parse Classification').item.json.title }}",
+          "companyName": "={{ $('Parse Classification').item.json.company }}"
+        }
+      },
+      "id": "c3d4e5f6-0038-4000-8000-000000000038",
+      "name": "HubSpot: Save Contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [
+        1460,
+        1700
+      ],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE_ME",
+          "name": "HubSpot account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "i1",
+              "leftValue": "={{ $('Parse Classification').item.json.category }}",
+              "rightValue": "interested",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0039-4000-8000-000000000039",
+      "name": "Interested?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1460,
+        1900
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "reply",
+        "messageId": "={{ $('Parse Classification').item.json.reply_message_id }}",
+        "emailType": "text",
+        "message": "=Hi {{ $('Parse Classification').item.json.first_name }},\n\nThanks for getting back to me. The easiest next step is to pick a time that suits you here: YOUR_BOOKING_LINK\n\nIf you would rather get a few details by email first, just let me know.\n\nBest,\nYOUR_NAME",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "c3d4e5f6-0040-4000-8000-000000000040",
+      "name": "Gmail: Send Booking Link",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1700,
+        1900
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0041-4000-8000-000000000041",
+      "name": "Report 6PM (Mon-Fri)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        2400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "c3d4e5f6-0042-4000-8000-000000000042",
+      "name": "Get Leads for Report",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        2400
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const today = new Date().toISOString().slice(0, 10);\nconst rows = items.map(i => i.json).filter(r => r.email);\nconst on = (v) => String(v || '').slice(0, 10) === today;\nconst count = (fn) => rows.filter(fn).length;\nconst added = count(r => on(r.added_at));\nconst qualified = count(r => on(r.added_at) && r.status !== 'disqualified');\nconst sent = count(r => on(r.sent_at));\nconst replies = count(r => on(r.replied_at));\nconst interested = count(r => on(r.replied_at) && ['interested', 'question'].includes(r.status));\nconst contacted = count(r => parseInt(r.step || '0', 10) >= 1);\nconst repliedTotal = count(r => r.replied_at);\nconst rate = contacted ? ((repliedTotal / contacted) * 100).toFixed(1) : '0.0';\nconst tierA = count(r => r.tier === 'A' && r.status === 'new');\nconst report = ':bar_chart: *Daily Lead Gen Report (' + today + ')*\\n'\n  + 'New leads sourced: ' + added + ' (qualified: ' + qualified + ')\\n'\n  + 'Emails sent today: ' + sent + '\\n'\n  + 'Replies today: ' + replies + ' (hot: ' + interested + ')\\n'\n  + 'Overall reply rate: ' + rate + '%\\n'\n  + 'Tier A leads waiting in queue: ' + tierA + '\\n'\n  + 'Total leads in database: ' + rows.length;\nreturn [{ json: { report } }];"
+      },
+      "id": "c3d4e5f6-0043-4000-8000-000000000043",
+      "name": "Build Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        2400
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "={{ $json.report }}",
+        "otherOptions": {}
+      },
+      "id": "c3d4e5f6-0044-4000-8000-000000000044",
+      "name": "Slack: Daily Report",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        680,
+        2400
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## FLOW 1: Lead Sourcing + AI Scoring (Mon-Fri 8 AM)\nApollo People Search (free) finds prospects matching your ICP -> removes duplicates already in your sheet -> Apollo Enrich (1 credit each, max daily_target) gets verified emails -> scrapes the company website -> AI scores fit 0-100 and finds a personalization hook -> saves to Google Sheet as 'new' (score >= min_score + verified email) or 'disqualified'.\n\nEdit the 'ICP Config' node first!",
+        "height": 330,
+        "width": 760
+      },
+      "id": "c3d4e5f6-0045-4000-8000-000000000045",
+      "name": "Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -520
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## FLOW 2: 3-Step Outreach Sequence (Mon-Fri 10 AM)\nPicks due leads: new leads get email 1; no reply after 3 days -> follow-up (same Gmail thread); no reply after 4 more days -> break-up email, then sequence_complete.\nMax 25 emails/day, best-scoring leads first, random 40-90s pause between sends. Leads that reply are never emailed again.",
+        "height": 330,
+        "width": 760
+      },
+      "id": "c3d4e5f6-0046-4000-8000-000000000046",
+      "name": "Note 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## FLOW 3: Reply Handling + CRM (checks inbox every minute)\nMatches replies to leads by Gmail thread ID -> AI classifies the reply -> updates the sheet -> interested/question: Slack alert + HubSpot contact. 'Interested' also gets an auto-reply with your booking link.\nReplace YOUR_BOOKING_LINK and YOUR_NAME in the Gmail node.",
+        "height": 330,
+        "width": 760
+      },
+      "id": "c3d4e5f6-0047-4000-8000-000000000047",
+      "name": "Note 3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        1250
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## FLOW 4: Daily Report (Mon-Fri 6 PM)\nPosts a summary to Slack: leads sourced, emails sent, replies, hot leads, reply rate and Tier A queue.\n\n## SETUP CHECKLIST\n1. Create the Google Sheet from leads-master-template.csv (tab name: Leads)\n2. Set the Sheet ID in every Google Sheets node\n3. Credentials: Apollo (Header Auth, name x-api-key), Google Sheets, OpenAI, Gmail, Slack, HubSpot\n4. Replace YOUR_NAME, YOUR_COMPANY, YOUR_BOOKING_LINK, Slack channel ID\n5. Test with daily_target = 3 before going live",
+        "height": 330,
+        "width": 760
+      },
+      "id": "c3d4e5f6-0048-4000-8000-000000000048",
+      "name": "Note 4",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        1950
+      ]
+    }
+  ],
+  "connections": {
+    "Manual: Run Sourcing": {
+      "main": [
+        [
+          {
+            "node": "ICP Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sourcing 8AM (Mon-Fri)": {
+      "main": [
+        [
+          {
+            "node": "ICP Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ICP Config": {
+      "main": [
+        [
+          {
+            "node": "Get Existing Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Existing Leads": {
+      "main": [
+        [
+          {
+            "node": "Collect Existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Existing": {
+      "main": [
+        [
+          {
+            "node": "Apollo: Search People",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apollo: Search People": {
+      "main": [
+        [
+          {
+            "node": "Filter New People",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New People": {
+      "main": [
+        [
+          {
+            "node": "Apollo: Enrich Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apollo: Enrich Person": {
+      "main": [
+        [
+          {
+            "node": "Merge Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Fetch Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Website": {
+      "main": [
+        [
+          {
+            "node": "Merge Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Website": {
+      "main": [
+        [
+          {
+            "node": "AI: Score Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI: Score Lead": {
+      "main": [
+        [
+          {
+            "node": "Parse Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Score": {
+      "main": [
+        [
+          {
+            "node": "Save Lead to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Model (Score)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI: Score Lead",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual: Run Outreach": {
+      "main": [
+        [
+          {
+            "node": "Get All Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outreach 10AM (Mon-Fri)": {
+      "main": [
+        [
+          {
+            "node": "Get All Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Leads": {
+      "main": [
+        [
+          {
+            "node": "Select Due Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Due Leads": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI: Write Email": {
+      "main": [
+        [
+          {
+            "node": "Parse Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Email": {
+      "main": [
+        [
+          {
+            "node": "Email OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Send Intro": {
+      "main": [
+        [
+          {
+            "node": "Update After Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Reply Follow-up": {
+      "main": [
+        [
+          {
+            "node": "Update After Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update After Send": {
+      "main": [
+        [
+          {
+            "node": "Wait 40-90s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 40-90s": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Leads": {
+      "main": [
+        [],
+        [
+          {
+            "node": "AI: Write Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Model (Email)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI: Write Email",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email OK?": {
+      "main": [
+        [
+          {
+            "node": "First Email?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "First Email?": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Send Intro",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail: Reply Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Trigger (Replies)": {
+      "main": [
+        [
+          {
+            "node": "Find Lead by Thread",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Lead by Thread": {
+      "main": [
+        [
+          {
+            "node": "AI: Classify Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI: Classify Reply": {
+      "main": [
+        [
+          {
+            "node": "Parse Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Classification": {
+      "main": [
+        [
+          {
+            "node": "Update Lead Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Lead Status": {
+      "main": [
+        [
+          {
+            "node": "Hot Lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Model (Classify)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI: Classify Reply",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hot Lead?": {
+      "main": [
+        [
+          {
+            "node": "Slack: Hot Lead Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HubSpot: Save Contact",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Interested?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interested?": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Send Booking Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report 6PM (Mon-Fri)": {
+      "main": [
+        [
+          {
+            "node": "Get Leads for Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Leads for Report": {
+      "main": [
+        [
+          {
+            "node": "Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report": {
+      "main": [
+        [
+          {
+            "node": "Slack: Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}
