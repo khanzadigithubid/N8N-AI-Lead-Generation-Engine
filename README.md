@@ -44,39 +44,12 @@ This n8n workflow automates the entire B2B outbound sales pipeline — from find
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        FLOW 1 — SOURCING                        │
-│  Trigger (8AM / Manual)                                         │
-│    → ICP Config → Get Existing Leads → Apollo Search            │
-│    → Filter Duplicates → Apollo Enrich (1 credit/lead)          │
-│    → Fetch Website → AI Score (GPT-4o-mini)                     │
-│    → Save to Google Sheets (status: new / disqualified)         │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                       FLOW 2 — OUTREACH                         │
-│  Trigger (10AM / Manual)                                        │
-│    → Get All Leads → Select Due Leads (max 25/day)              │
-│    → Loop: AI Write Email → Gmail Send / Reply                  │
-│    → Update Sheet → Wait 40–90s → Next Lead                     │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                    FLOW 3 — REPLY HANDLING                      │
-│  Gmail Trigger (every minute)                                   │
-│    → Find Lead by Thread ID → AI Classify Reply                 │
-│    → Update Lead Status                                         │
-│    → Hot Lead? → Slack Alert + HubSpot Upsert                   │
-│               → Interested? → Auto-send Booking Link            │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                     FLOW 4 — DAILY REPORT                       │
-│  Trigger (6PM Mon-Fri)                                          │
-│    → Get All Leads → Build Stats → Post to Slack                │
-└─────────────────────────────────────────────────────────────────┘
-```
+![AI Lead Generation Engine — Full Workflow Diagram](assets/architecture.png)
+
+> **Flow 1** (8 AM) → Sources & scores leads via Apollo + GPT-4o-mini  
+> **Flow 2** (10 AM) → Sends 3-step personalized email sequence via Gmail  
+> **Flow 3** (every minute) → Classifies replies, alerts on Slack, syncs to HubSpot  
+> **Flow 4** (6 PM) → Posts daily performance report to Slack
 
 ---
 
